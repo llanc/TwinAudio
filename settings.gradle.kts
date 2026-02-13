@@ -19,8 +19,12 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        maven { url = uri("https://jitpack.io") }
+        // LSPosed API 仓库
+        maven { url = uri("https://api.xposed.info/") }
     }
 }
 
 rootProject.name = "TwinAudio"
 include(":app")
+include(":magisk:zygisk")

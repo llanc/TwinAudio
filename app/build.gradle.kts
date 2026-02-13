@@ -5,20 +5,21 @@ plugins {
 
 android {
     namespace = "com.lrust.twinaudio"
-    compileSdk {
-        version = release(36) {
-            minorApiLevel = 1
-        }
-    }
+    compileSdk = 34  // 升级到 34 以满足 AndroidX 要求
 
     defaultConfig {
         applicationId = "com.lrust.twinaudio"
-        minSdk = 33
-        targetSdk = 36
+        minSdk = 33      // 保持最低版本为 Android 13
+        targetSdk = 33   // 保持目标版本为 Android 13
         versionCode = 1
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // NDK 配置（如需要 JNI 通信）
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     buildTypes {
@@ -37,6 +38,17 @@ android {
     buildFeatures {
         compose = true
     }
+
+    // 启用 CMake（如果需要 JNI）
+    // 暂时注释以测试 Kotlin 编译
+    /*
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+    */
 }
 
 dependencies {
@@ -48,6 +60,15 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+
+    // LSPosed API
+    compileOnly("de.robv.android.xposed:api:82")
+    compileOnly("de.robv.android.xposed:api:82:sources")
+
+    // Root 权限相关（如需要）
+    implementation("com.github.topjohnwu.libsu:core:5.0.5")
+    implementation("com.github.topjohnwu.libsu:io:5.0.5")
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

@@ -1,0 +1,8 @@
+id=twinaudio
+name=TwinAudio - Dual Audio Output
+version=v1.0
+versionCode=1
+author=lrust
+description=通过 LD_PRELOAD 注入 audioserver，实现蓝牙SBC + USB-C/AUX 同步双音频输出，独立延迟同步与音量控制。需要 Magisk + LSPosed。
+updateJson=https://raw.githubusercontent.com/yourusername/TwinAudio/master/update.json
+
