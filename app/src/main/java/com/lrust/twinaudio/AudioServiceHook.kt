@@ -40,7 +40,7 @@ object AudioServiceHook {
     // 防抖与全局直连
     private var mainHandler: Handler? = null
     private var debounceRunnable: Runnable? = null
-    private var a2dpProxy: android.bluetooth.BluetoothProfile? = null // 👈 全局蓝牙直连通道
+    private var a2dpProxy: android.bluetooth.BluetoothProfile? = null
 
     fun init(classLoader: ClassLoader) {
         try {
@@ -81,12 +81,10 @@ object AudioServiceHook {
 
                     mainHandler = Handler(Looper.getMainLooper())
 
-                    // 🚀 核心优化：系统启动时，直接和蓝牙硬件层建立永久连接！
                     val adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
                     adapter?.getProfileProxy(context, object : android.bluetooth.BluetoothProfile.ServiceListener {
                         override fun onServiceConnected(profile: Int, proxy: android.bluetooth.BluetoothProfile) {
                             a2dpProxy = proxy
-                            Log.i(TAG, "🔗 蓝牙 A2DP 底层控制通道已建立永久连接！")
                         }
                         override fun onServiceDisconnected(profile: Int) {
                             a2dpProxy = null
@@ -109,7 +107,7 @@ object AudioServiceHook {
                                     currentDelayMs = newDelay
                                     if (isStreamerRunning) {
                                         thread {
-                                            synchronized(engineLock) { // 严格上锁，防止滑块拖动产生并发爆炸
+                                            synchronized(engineLock) {
                                                 stopEngineLocked()
                                                 startEngineLocked(context)
                                             }
@@ -224,14 +222,12 @@ object AudioServiceHook {
             var track: AudioTrack? = null
 
             try {
-                // 🚨 决杀动作：瞬发唤醒！抢在系统路由重估前，强行激活蓝牙硬件！
                 val btAddress = btDevice!!.address
                 if (a2dpProxy != null && btAddress.isNotEmpty()) {
                     try {
                         val adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
                         val setActiveMethod = a2dpProxy!!.javaClass.getMethod("setActiveDevice", android.bluetooth.BluetoothDevice::class.java)
                         setActiveMethod.invoke(a2dpProxy, adapter.getRemoteDevice(btAddress))
-                        Log.i(TAG, "🔥 瞬发物理级强启蓝牙电波，成功抢夺输出权！")
                     } catch (e: Exception) { }
                 } else {
                     wakeUpBluetoothRadioAsync(btAddress)
@@ -240,7 +236,7 @@ object AudioServiceHook {
                 val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
                 audioManager.setParameters("A2dpSuspended=false")
 
-                // 1. 逆向路由锁定：逼迫系统走刚被我们强行唤醒的蓝牙
+                // 1. 逆向路由锁定：只强制 MEDIA 标签的声音走蓝牙
                 try {
                     val strategiesClass = Class.forName("android.media.audiopolicy.AudioProductStrategy")
                     val getStrategiesMethod = AudioManager::class.java.getMethod("getAudioProductStrategies")
@@ -304,11 +300,11 @@ object AudioServiceHook {
                         .build()
                 } finally { Binder.restoreCallingIdentity(identity) }
 
-                // 3. 锁定给 USB 的轨道
+                // 🚨 3. 核心解法：换马甲！使用 USAGE_GAME，完美避开系统的 USAGE_MEDIA 强制蓝牙路由！
                 track = AudioTrack.Builder()
                     .setAudioAttributes(
                         AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setUsage(AudioAttributes.USAGE_GAME) // <--- 关键马甲：GAME 标签！
                             .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                             .build()
                     )
@@ -317,7 +313,7 @@ object AudioServiceHook {
                     .setTransferMode(AudioTrack.MODE_STREAM)
                     .build()
 
-                track.setPreferredDevice(usbDevice)
+                track.setPreferredDevice(usbDevice) // 此时系统就不会再干预它的去向了
                 currentUsbTrack = track
 
                 recorder.startRecording()
