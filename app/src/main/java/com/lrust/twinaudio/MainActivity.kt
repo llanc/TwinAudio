@@ -7,6 +7,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState // 滚动状态记忆
+import androidx.compose.foundation.verticalScroll   //垂直滚动修饰符
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -69,6 +71,9 @@ fun TwinAudioControlPanel() {
         sendConfigUpdate()
     }
 
+    // 创建一个滚动状态
+    val scrollState = rememberScrollState()
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -84,6 +89,7 @@ fun TwinAudioControlPanel() {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+                .verticalScroll(scrollState) // 允许整个内容区域垂直滚动！
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
@@ -261,7 +267,7 @@ fun TwinAudioControlPanel() {
             }
 
             // ================================================================
-            // 操作说明卡片 (补回)
+            // 操作说明卡片
             // ================================================================
             Card(
                 modifier = Modifier.fillMaxWidth(),
