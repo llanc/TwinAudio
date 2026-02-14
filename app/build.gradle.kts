@@ -38,17 +38,7 @@ android {
     buildFeatures {
         compose = true
     }
-
-    // 启用 CMake（如果需要 JNI）
-    // 暂时注释以测试 Kotlin 编译
-    /*
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
-        }
-    }
-    */
+    
 }
 
 dependencies {

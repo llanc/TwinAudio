@@ -27,4 +27,3 @@ dependencyResolutionManagement {
 
 rootProject.name = "TwinAudio"
 include(":app")
-include(":magisk:zygisk")

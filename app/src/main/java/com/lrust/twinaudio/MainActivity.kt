@@ -38,17 +38,16 @@ class MainActivity : ComponentActivity() {
 fun TwinAudioControlPanel() {
     val context = androidx.compose.ui.platform.LocalContext.current
 
-    // 🚀 新增：获取本地存储实例
+    // 获取本地存储实例
     val sharedPrefs = remember { context.getSharedPreferences("TwinAudioPrefs", Context.MODE_PRIVATE) }
 
-    // 绑定到底层的变量 (启动时优先从本地存储读取，如果没有则使用默认值)
+    // 优先从本地存储读取
     var delayMs by remember { mutableStateOf(sharedPrefs.getFloat("delayMs", 0f)) }
     var volumeUsb by remember { mutableStateOf(sharedPrefs.getFloat("volumeUsb", 1.0f)) }
     var hookEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("hookEnabled", true)) }
 
-    // 发送广播到底层 (AudioServiceHook 会接收这些参数)
+    // 发送广播到底层并保存本地
     val sendConfigUpdate = {
-        // 1. 永久保存当前设置到本地
         sharedPrefs.edit().apply {
             putFloat("delayMs", delayMs)
             putFloat("volumeUsb", volumeUsb)
@@ -56,7 +55,6 @@ fun TwinAudioControlPanel() {
             apply()
         }
 
-        // 2. 发送指令给底层系统
         val intent = Intent("com.lrust.twinaudio.UPDATE_CONFIG")
         intent.putExtra("delayMs", delayMs.roundToInt())
         intent.putExtra("volumeUsb", volumeUsb)
@@ -64,7 +62,7 @@ fun TwinAudioControlPanel() {
         context.sendBroadcast(intent)
     }
 
-    // 🚀 新增：自动化同步！每次打开 App 界面时，自动将本地存储的配置下发给底层
+    // 自动化同步
     LaunchedEffect(Unit) {
         sendConfigUpdate()
     }
@@ -132,7 +130,7 @@ fun TwinAudioControlPanel() {
             }
 
             // ================================================================
-            // USB 延迟控制 (核心同步功能)
+            // USB 延迟控制 (滑块粗调 + 按钮精调)
             // ================================================================
             Card(
                 modifier = Modifier.fillMaxWidth()
@@ -153,25 +151,58 @@ fun TwinAudioControlPanel() {
                         color = MaterialTheme.colorScheme.primary
                     )
 
+                    // 1. 滑块：用于大范围快速粗调
                     Slider(
                         value = delayMs,
                         onValueChange = { delayMs = it },
                         onValueChangeFinished = { sendConfigUpdate() },
                         valueRange = 0f..1000f,
-                        steps = 999,
                         modifier = Modifier.fillMaxWidth()
                     )
 
+                    // 滑块刻度说明
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .offset(y = (-8).dp), // 稍微往上靠一点，UI更紧凑
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text("0 ms", style = MaterialTheme.typography.bodySmall)
                         Text("1000 ms", style = MaterialTheme.typography.bodySmall)
                     }
 
+                    // 2. 盲操大按钮：用于 1ms 极限精度微调
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        FilledTonalButton(
+                            onClick = {
+                                delayMs = (delayMs - 1f).coerceAtLeast(0f)
+                                sendConfigUpdate()
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(64.dp)
+                        ) {
+                            Text("- 1ms", style = MaterialTheme.typography.titleMedium)
+                        }
+
+                        FilledTonalButton(
+                            onClick = {
+                                delayMs = (delayMs + 1f).coerceAtMost(1000f)
+                                sendConfigUpdate()
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(64.dp)
+                        ) {
+                            Text("+ 1ms", style = MaterialTheme.typography.titleMedium)
+                        }
+                    }
+
                     Text(
-                        text = "💡 提示：蓝牙耳机天生有 150ms 左右的延迟。向右拖动此滑块，可强制让有线音响等待蓝牙，从而实现双通道完美同步。",
+                        text = "💡 提示：先用滑块进行大范围粗调寻找同步点；然后闭上眼睛，使用下方按钮进行 1ms 精度的极致微调。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -215,37 +246,6 @@ fun TwinAudioControlPanel() {
                         Text("静音", style = MaterialTheme.typography.bodySmall)
                         Text("最大音量", style = MaterialTheme.typography.bodySmall)
                     }
-                }
-            }
-
-            // ================================================================
-            // 操作说明
-            // ================================================================
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                )
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "⚠️ 操作指南",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-
-                    Text(
-                        text = """
-                        • 参数记忆：您调整的参数已被自动记忆。手机重启后打开一次本软件即可重新下发参数。
-                        • 蓝牙音量：请直接使用手机侧边的【实体音量键】控制。
-                        • 有线音量：使用上方【独立音量】滑块控制。
-                        • 延迟变动时，底层引擎会极速重启以填充空数据，声音会有半秒停顿，属正常现象。
-                        """.trimIndent(),
-                        style = MaterialTheme.typography.bodySmall
-                    )
                 }
             }
         }
