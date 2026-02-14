@@ -21,6 +21,11 @@ object AudioServiceHook {
     private var streamerThread: Thread? = null
     private var btDevice: AudioDeviceInfo? = null
 
+    // 🚀 核心控制变量
+    private var isPluginEnabled = true
+    private var currentBtVolume = 1.0f
+    private var currentBtTrack: AudioTrack? = null
+
     fun init(classLoader: ClassLoader) {
         // 1. 放行特权内录
         try {
@@ -32,24 +37,65 @@ object AudioServiceHook {
                 })
         } catch (t: Throwable) {}
 
-        // 2. 🛡️ 无死角锁死蓝牙状态！
+        // 2. 🛡️ 纯粹的物理级防断开护盾（彻底解决抢占通道和幽灵连接）
         try {
             val inventoryClass = XposedHelpers.findClass("com.android.server.audio.AudioDeviceInventory", classLoader)
-            XposedBridge.hookAllMethods(inventoryClass, "makeA2dpDeviceUnavailableNow", XC_MethodReplacement.returnConstant(null))
-            XposedBridge.hookAllMethods(inventoryClass, "makeA2dpDeviceUnavailableLater", XC_MethodReplacement.returnConstant(null))
-            XposedBridge.hookAllMethods(inventoryClass, "onSetA2dpSinkConnectionState", object : XC_MethodHook() {
+
+            val smartDisconnectHook = object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
-                    if (param.args[1] as Int == 0) param.result = null
+                    if (!isPluginEnabled) return
+
+                    try {
+                        if (param.method.name == "onSetA2dpSinkConnectionState") {
+                            val state = param.args[1] as Int
+                            if (state != 0) return
+                        }
+
+                        // 【绝杀】：无视任何软件逻辑，直接查底层蓝牙芯片的物理连接状态！
+                        val adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
+                        if (adapter != null) {
+                            val physicalState = adapter.getProfileConnectionState(2) // 2 = A2DP
+                            if (physicalState == 2) {
+                                // 耳机物理上还连着，说明是系统由于插线导致的虚拟断开，拦截！
+                                // 这样蓝牙就不会掉线重连，也就不会抢走 USB 的首发音轨！
+                                Log.w(TAG, "⛔ 物理连接正常，拦截系统虚拟断开，防止抢占 USB 通道！")
+                                param.result = null
+                            } else {
+                                // 用户真关机了，放行！解决扬声器没声音的幽灵连接！
+                                Log.i(TAG, "🟢 蓝牙已真实物理断开，放行清理指令。")
+                            }
+                        }
+                    } catch (t: Throwable) {}
                 }
-            })
+            }
+
+            XposedBridge.hookAllMethods(inventoryClass, "makeA2dpDeviceUnavailableNow", smartDisconnectHook)
+            XposedBridge.hookAllMethods(inventoryClass, "makeA2dpDeviceUnavailableLater", smartDisconnectHook)
+            XposedBridge.hookAllMethods(inventoryClass, "onSetA2dpSinkConnectionState", smartDisconnectHook)
+            Log.i(TAG, "✓ 物理级蓝牙护盾部署完毕！")
         } catch (t: Throwable) {}
 
-        // 3. 监听设备插拔
+        // 3. 监听设备插拔与广播
         try {
             val audioServiceClass = XposedHelpers.findClass("com.android.server.audio.AudioService", classLoader)
             XposedHelpers.findAndHookMethod(audioServiceClass, "systemReady", object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     val context = XposedHelpers.getObjectField(param.thisObject, "mContext") as Context
+
+                    val filter = android.content.IntentFilter("com.lrust.twinaudio.UPDATE_CONFIG")
+                    context.registerReceiver(object : android.content.BroadcastReceiver() {
+                        override fun onReceive(c: Context, intent: android.content.Intent) {
+                            isPluginEnabled = intent.getBooleanExtra("hookEnabled", true)
+                            currentBtVolume = intent.getFloatExtra("volumeBt", 1.0f)
+
+                            currentBtTrack?.setVolume(currentBtVolume)
+
+                            if (!isPluginEnabled) {
+                                stopDualAudioStreamer()
+                            }
+                        }
+                    }, filter)
+
                     setupDeviceMonitor(context)
                 }
             })
@@ -68,7 +114,7 @@ object AudioServiceHook {
             }
             btDevice = devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP }
 
-            if (hasWired && btDevice != null) {
+            if (isPluginEnabled && hasWired && btDevice != null) {
                 Log.i(TAG, "🎧 检测到双设备！准备分发...")
                 startDualAudioStreamer(context)
             } else {
@@ -113,11 +159,9 @@ object AudioServiceHook {
         isStreamerRunning = true
 
         streamerThread = thread {
-            // 🚨 音质保驾护航 1：将当前线程提升为系统最高级别的紧急音频线程！杜绝卡顿！
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
 
             try {
-                // 凭证伪装
                 val iMediaProjectionClass = Class.forName("android.media.projection.IMediaProjection")
                 val fakeBinder = Binder()
                 val fakeIMediaProjection = Proxy.newProxyInstance(
@@ -139,16 +183,10 @@ object AudioServiceHook {
                 val captureConfig = AudioPlaybackCaptureConfiguration.Builder(fakeProjection)
                     .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
                     .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
-                    // 🚨 音质保驾护航 2：排除自己 (system_server) 发出的声音，彻底斩断无限循环的回音壁！
                     .excludeUid(android.os.Process.myUid())
                     .build()
 
-                val format = AudioFormat.Builder()
-                    .setSampleRate(48000)
-                    .setChannelMask(AudioFormat.CHANNEL_IN_STEREO)
-                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .build()
-
+                val format = AudioFormat.Builder().setSampleRate(48000).setChannelMask(AudioFormat.CHANNEL_IN_STEREO).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build()
                 val bufferSize = AudioRecord.getMinBufferSize(48000, AudioFormat.CHANNEL_IN_STEREO, AudioFormat.ENCODING_PCM_16BIT)
 
                 val identity = Binder.clearCallingIdentity()
@@ -174,19 +212,19 @@ object AudioServiceHook {
                     .build()
 
                 track.setPreferredDevice(btDevice)
+                currentBtTrack = track
 
                 recorder!!.startRecording()
                 track.play()
-                track.setVolume(AudioTrack.getMaxVolume())
+                track.setVolume(currentBtVolume)
 
                 wakeUpBluetoothRadio(context, btDevice!!.address)
                 val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
                 audioManager.setParameters("A2dpSuspended=false")
 
                 val buffer = ByteArray(bufferSize)
-                Log.i(TAG, "🎵 开始无损搬运！(已开启抗回音与 URGET_AUDIO 加速)")
+                Log.i(TAG, "🎵 开始无损搬运！")
 
-                var loopCount = 0
                 while (isStreamerRunning) {
                     val read = recorder.read(buffer, 0, buffer.size)
                     if (read > 0) {
@@ -195,6 +233,7 @@ object AudioServiceHook {
                 }
 
                 recorder.stop(); recorder.release(); track.stop(); track.release()
+                currentBtTrack = null
 
             } catch (t: Throwable) {
                 isStreamerRunning = false

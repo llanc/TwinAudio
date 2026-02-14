@@ -1,5 +1,6 @@
 package com.lrust.twinaudio
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -34,10 +35,21 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TwinAudioControlPanel() {
+    // 获取当前上下文（用来发广播）
+    val context = androidx.compose.ui.platform.LocalContext.current
+
     var delayMs by remember { mutableStateOf(0f) }
     var volumeBt by remember { mutableStateOf(1.0f) }
-    var volumeUsb by remember { mutableStateOf(1.0f) }
     var hookEnabled by remember { mutableStateOf(true) }
+
+    // 🚀 核心：统一的广播发送器，替换原来的 IPCManager
+    val sendConfigUpdate = {
+        val intent = Intent("com.lrust.twinaudio.UPDATE_CONFIG")
+        intent.putExtra("delayMs", delayMs.roundToInt())
+        intent.putExtra("volumeBt", volumeBt)
+        intent.putExtra("hookEnabled", hookEnabled)
+        context.sendBroadcast(intent)
+    }
 
     Scaffold(
         topBar = {
@@ -86,7 +98,7 @@ fun TwinAudioControlPanel() {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = if (hookEnabled) "✓ 已激活" else "✗ 未激活",
+                            text = if (hookEnabled) "✓ 双音频中转站已激活" else "✗ 已暂停分发",
                             style = MaterialTheme.typography.bodyLarge
                         )
 
@@ -94,11 +106,7 @@ fun TwinAudioControlPanel() {
                             checked = hookEnabled,
                             onCheckedChange = { enabled ->
                                 hookEnabled = enabled
-                                if (enabled) {
-                                    IPCManager.enableHook()
-                                } else {
-                                    IPCManager.disableHook()
-                                }
+                                sendConfigUpdate()
                             }
                         )
                     }
@@ -116,7 +124,7 @@ fun TwinAudioControlPanel() {
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "USB 音频延迟",
+                        text = "蓝牙端额外延迟",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
@@ -131,12 +139,7 @@ fun TwinAudioControlPanel() {
                         value = delayMs,
                         onValueChange = { delayMs = it },
                         onValueChangeFinished = {
-                            // 滑块停止时发送更新
-                            IPCManager.updateConfig(
-                                delayMs.roundToInt(),
-                                volumeBt,
-                                volumeUsb
-                            )
+                            sendConfigUpdate() // 滑块停止时发送更新
                         },
                         valueRange = 0f..1000f,
                         steps = 99,  // 10ms 步进
@@ -152,7 +155,7 @@ fun TwinAudioControlPanel() {
                     }
 
                     Text(
-                        text = "调整此值以同步蓝牙和有线音频。如果蓝牙延迟，增加此值；如果有线延迟，减少此值。",
+                        text = "物理限制提示：由于蓝牙无线传输本身就比有线慢，增加此值会让蓝牙端的声音进一步延后。纯 Java 方案无法延迟底层的有线端。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -170,7 +173,7 @@ fun TwinAudioControlPanel() {
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "蓝牙音量系数",
+                        text = "蓝牙端独立音量",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
@@ -185,13 +188,9 @@ fun TwinAudioControlPanel() {
                         value = volumeBt,
                         onValueChange = { volumeBt = it },
                         onValueChangeFinished = {
-                            IPCManager.updateConfig(
-                                delayMs.roundToInt(),
-                                volumeBt,
-                                volumeUsb
-                            )
+                            sendConfigUpdate() // 滑块停止时发送更新
                         },
-                        valueRange = 0f..2f,
+                        valueRange = 0f..1f,
                         modifier = Modifier.fillMaxWidth()
                     )
 
@@ -199,56 +198,8 @@ fun TwinAudioControlPanel() {
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("0%", style = MaterialTheme.typography.bodySmall)
+                        Text("静音", style = MaterialTheme.typography.bodySmall)
                         Text("100%", style = MaterialTheme.typography.bodySmall)
-                        Text("200%", style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-            }
-
-            // ================================================================
-            // USB 音量
-            // ================================================================
-            Card(
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text(
-                        text = "USB/AUX 音量系数",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-
-                    Text(
-                        text = "${(volumeUsb * 100).roundToInt()}%",
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = MaterialTheme.colorScheme.tertiary
-                    )
-
-                    Slider(
-                        value = volumeUsb,
-                        onValueChange = { volumeUsb = it },
-                        onValueChangeFinished = {
-                            IPCManager.updateConfig(
-                                delayMs.roundToInt(),
-                                volumeBt,
-                                volumeUsb
-                            )
-                        },
-                        valueRange = 0f..2f,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("0%", style = MaterialTheme.typography.bodySmall)
-                        Text("100%", style = MaterialTheme.typography.bodySmall)
-                        Text("200%", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -258,18 +209,14 @@ fun TwinAudioControlPanel() {
             // ================================================================
             Button(
                 onClick = {
-                    IPCManager.updateConfig(
-                        delayMs.roundToInt(),
-                        volumeBt,
-                        volumeUsb
-                    )
+                    sendConfigUpdate()
                 },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp)
             ) {
                 Text(
-                    text = "立即应用设置",
+                    text = "下发指令到底层",
                     style = MaterialTheme.typography.titleMedium
                 )
             }
@@ -288,18 +235,17 @@ fun TwinAudioControlPanel() {
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = "⚠️ 使用说明",
+                        text = "⚠️ 终极版使用说明",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold
                     )
 
                     Text(
                         text = """
-                        1. 确保已在 LSPosed 中激活本模块
-                        2. 勾选 system_server 作用域
-                        3. 确保 Magisk Zygisk 已启用
-                        4. 安装 TwinAudio Magisk 模块
-                        5. 重启设备后生效
+                        1. 本方案已实现「纯 Java 层降维打击」。
+                        2. 彻底抛弃 Magisk！请确保旧版 Magisk 模块已卸载。
+                        3. 仅需在 LSPosed 中勾选【系统框架 (system_server)】。
+                        4. 插入 USB 音响与蓝牙耳机即可自动触发双流分发。
                         """.trimIndent(),
                         style = MaterialTheme.typography.bodySmall
                     )
@@ -308,4 +254,3 @@ fun TwinAudioControlPanel() {
         }
     }
 }
-
