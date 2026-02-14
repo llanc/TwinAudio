@@ -39,7 +39,9 @@ fun TwinAudioControlPanel() {
     val context = androidx.compose.ui.platform.LocalContext.current
 
     // 获取本地存储实例
-    val sharedPrefs = remember { context.getSharedPreferences("TwinAudioPrefs", Context.MODE_PRIVATE) }
+    val sharedPrefs = remember {
+        context.getSharedPreferences("TwinAudioPrefs", Context.MODE_PRIVATE)
+    }
 
     // 优先从本地存储读取
     var delayMs by remember { mutableStateOf(sharedPrefs.getFloat("delayMs", 0f)) }
@@ -164,7 +166,7 @@ fun TwinAudioControlPanel() {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .offset(y = (-8).dp), // 稍微往上靠一点，UI更紧凑
+                            .offset(y = (-8).dp),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text("0 ms", style = MaterialTheme.typography.bodySmall)
@@ -202,7 +204,7 @@ fun TwinAudioControlPanel() {
                     }
 
                     Text(
-                        text = "💡 提示：先用滑块进行大范围粗调寻找同步点；然后闭上眼睛，使用下方按钮进行 1ms 精度的极致微调。",
+                        text = "💡 提示：先用滑块粗调，再闭上眼睛用下方按钮进行 1ms 精度的极致微调对齐。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -210,7 +212,7 @@ fun TwinAudioControlPanel() {
             }
 
             // ================================================================
-            // USB 独立音量控制
+            // USB 独立音量控制 (支持 300% 暴增)
             // ================================================================
             Card(
                 modifier = Modifier.fillMaxWidth()
@@ -220,7 +222,7 @@ fun TwinAudioControlPanel() {
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "有线端 (USB/AUX) 独立音量",
+                        text = "有线端数字放大器",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
@@ -235,17 +237,56 @@ fun TwinAudioControlPanel() {
                         value = volumeUsb,
                         onValueChange = { volumeUsb = it },
                         onValueChangeFinished = { sendConfigUpdate() },
-                        valueRange = 0f..1f,
+                        valueRange = 0f..3f,
                         modifier = Modifier.fillMaxWidth()
                     )
 
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .offset(y = (-8).dp),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text("静音", style = MaterialTheme.typography.bodySmall)
-                        Text("最大音量", style = MaterialTheme.typography.bodySmall)
+                        Text("100%", style = MaterialTheme.typography.bodySmall)
+                        Text("暴增 300%", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                     }
+
+                    Text(
+                        text = "💡 提示：向右拉突破 100%，引擎将通过 CPU 对 PCM 信号进行底层软件级暴增放大！",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            // ================================================================
+            // 操作说明卡片 (补回)
+            // ================================================================
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "⚠️ 操作指南",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    Text(
+                        text = """
+                        • 蓝牙音量：请直接使用手机侧边的【实体音量键】控制。
+                        • 有线音量：使用上方【数字放大器】控制，最高可达 300%。
+                        • 记忆功能：引擎已直连系统底层数据库，重启手机自动恢复参数，切歌自动重置防断流。
+                        """.trimIndent(),
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
             }
         }
