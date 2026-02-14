@@ -35,18 +35,18 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TwinAudioControlPanel() {
-    // 获取当前上下文（用来发广播）
     val context = androidx.compose.ui.platform.LocalContext.current
 
+    // 绑定到底层的变量 (默认 USB 无延迟，音量最大)
     var delayMs by remember { mutableStateOf(0f) }
-    var volumeBt by remember { mutableStateOf(1.0f) }
+    var volumeUsb by remember { mutableStateOf(1.0f) }
     var hookEnabled by remember { mutableStateOf(true) }
 
-    // 🚀 核心：统一的广播发送器，替换原来的 IPCManager
+    // 🚀 发送广播到底层 (AudioServiceHook 会接收这些参数)
     val sendConfigUpdate = {
         val intent = Intent("com.lrust.twinaudio.UPDATE_CONFIG")
         intent.putExtra("delayMs", delayMs.roundToInt())
-        intent.putExtra("volumeBt", volumeBt)
+        intent.putExtra("volumeUsb", volumeUsb)
         intent.putExtra("hookEnabled", hookEnabled)
         context.sendBroadcast(intent)
     }
@@ -70,7 +70,7 @@ fun TwinAudioControlPanel() {
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
             // ================================================================
-            // 状态卡片
+            // 模块状态卡片
             // ================================================================
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -87,7 +87,7 @@ fun TwinAudioControlPanel() {
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = "模块状态",
+                        text = "引擎状态",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
@@ -98,7 +98,7 @@ fun TwinAudioControlPanel() {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = if (hookEnabled) "✓ 双音频中转站已激活" else "✗ 已暂停分发",
+                            text = if (hookEnabled) "✓ 逆向分发引擎已激活" else "✗ 已挂起",
                             style = MaterialTheme.typography.bodyLarge
                         )
 
@@ -114,7 +114,7 @@ fun TwinAudioControlPanel() {
             }
 
             // ================================================================
-            // 延迟调节
+            // USB 延迟控制 (核心同步功能)
             // ================================================================
             Card(
                 modifier = Modifier.fillMaxWidth()
@@ -124,7 +124,7 @@ fun TwinAudioControlPanel() {
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "蓝牙端额外延迟",
+                        text = "有线端 (USB/AUX) 空轨延迟",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
@@ -138,11 +138,9 @@ fun TwinAudioControlPanel() {
                     Slider(
                         value = delayMs,
                         onValueChange = { delayMs = it },
-                        onValueChangeFinished = {
-                            sendConfigUpdate() // 滑块停止时发送更新
-                        },
+                        onValueChangeFinished = { sendConfigUpdate() },
                         valueRange = 0f..1000f,
-                        steps = 99,  // 10ms 步进
+                        steps = 999,
                         modifier = Modifier.fillMaxWidth()
                     )
 
@@ -155,7 +153,7 @@ fun TwinAudioControlPanel() {
                     }
 
                     Text(
-                        text = "物理限制提示：由于蓝牙无线传输本身就比有线慢，增加此值会让蓝牙端的声音进一步延后。纯 Java 方案无法延迟底层的有线端。",
+                        text = "💡 提示：蓝牙耳机天生有 150ms 左右的延迟。向右拖动此滑块，可强制让有线音响等待蓝牙，从而实现双通道完美同步。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -163,7 +161,7 @@ fun TwinAudioControlPanel() {
             }
 
             // ================================================================
-            // 蓝牙音量
+            // USB 独立音量控制
             // ================================================================
             Card(
                 modifier = Modifier.fillMaxWidth()
@@ -173,23 +171,21 @@ fun TwinAudioControlPanel() {
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "蓝牙端独立音量",
+                        text = "有线端 (USB/AUX) 独立音量",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
 
                     Text(
-                        text = "${(volumeBt * 100).roundToInt()}%",
+                        text = "${(volumeUsb * 100).roundToInt()}%",
                         style = MaterialTheme.typography.headlineMedium,
                         color = MaterialTheme.colorScheme.secondary
                     )
 
                     Slider(
-                        value = volumeBt,
-                        onValueChange = { volumeBt = it },
-                        onValueChangeFinished = {
-                            sendConfigUpdate() // 滑块停止时发送更新
-                        },
+                        value = volumeUsb,
+                        onValueChange = { volumeUsb = it },
+                        onValueChangeFinished = { sendConfigUpdate() },
                         valueRange = 0f..1f,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -199,30 +195,13 @@ fun TwinAudioControlPanel() {
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text("静音", style = MaterialTheme.typography.bodySmall)
-                        Text("100%", style = MaterialTheme.typography.bodySmall)
+                        Text("最大音量", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
 
             // ================================================================
-            // 应用按钮
-            // ================================================================
-            Button(
-                onClick = {
-                    sendConfigUpdate()
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp)
-            ) {
-                Text(
-                    text = "下发指令到底层",
-                    style = MaterialTheme.typography.titleMedium
-                )
-            }
-
-            // ================================================================
-            // 说明文字
+            // 操作说明
             // ================================================================
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -235,17 +214,16 @@ fun TwinAudioControlPanel() {
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = "⚠️ 终极版使用说明",
+                        text = "⚠️ 操作指南",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold
                     )
 
                     Text(
                         text = """
-                        1. 本方案已实现「纯 Java 层降维打击」。
-                        2. 彻底抛弃 Magisk！请确保旧版 Magisk 模块已卸载。
-                        3. 仅需在 LSPosed 中勾选【系统框架 (system_server)】。
-                        4. 插入 USB 音响与蓝牙耳机即可自动触发双流分发。
+                        • 蓝牙音量：请直接使用手机侧边的【实体音量键】控制。
+                        • 有线音量：使用上方【独立音量】滑块控制。
+                        • 延迟变动时，底层引擎会极速重启以填充空数据，声音会有半秒停顿，属正常现象。
                         """.trimIndent(),
                         style = MaterialTheme.typography.bodySmall
                     )

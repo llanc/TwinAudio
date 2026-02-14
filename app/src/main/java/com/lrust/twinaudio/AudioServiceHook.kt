@@ -32,17 +32,17 @@ object AudioServiceHook {
     private var currentUsbVolume = 1.0f
     private var currentUsbTrack: AudioTrack? = null
 
-    // 路由备份与线程锁
+    // 路由备份与并发锁
     private var savedAudioManager: AudioManager? = null
     private var savedMediaStrategy: Any? = null
-    private val engineLock = Any() // 状态机锁
+    private val engineLock = Any()
 
-    // 防抖计时器
+    // 防抖与全局直连
     private var mainHandler: Handler? = null
     private var debounceRunnable: Runnable? = null
+    private var a2dpProxy: android.bluetooth.BluetoothProfile? = null // 👈 全局蓝牙直连通道
 
     fun init(classLoader: ClassLoader) {
-        // 1. 放行特权内录
         try {
             val projectionServiceClass = XposedHelpers.findClass("com.android.server.media.projection.MediaProjectionManagerService\$BinderService", classLoader)
             val iMediaProjectionClass = XposedHelpers.findClass("android.media.projection.IMediaProjection", classLoader)
@@ -52,7 +52,6 @@ object AudioServiceHook {
                 })
         } catch (t: Throwable) {}
 
-        // 2. 🛡️ 物理级防断开护盾
         try {
             val inventoryClass = XposedHelpers.findClass("com.android.server.audio.AudioDeviceInventory", classLoader)
             val smartDisconnectHook = object : XC_MethodHook() {
@@ -64,7 +63,7 @@ object AudioServiceHook {
                         }
                         val adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
                         if (adapter != null && adapter.getProfileConnectionState(2) == 2) {
-                            param.result = null // 只要物理连着就不允许被系统踢掉
+                            param.result = null
                         }
                     } catch (t: Throwable) {}
                 }
@@ -74,15 +73,25 @@ object AudioServiceHook {
             XposedBridge.hookAllMethods(inventoryClass, "onSetA2dpSinkConnectionState", smartDisconnectHook)
         } catch (t: Throwable) {}
 
-        // 3. 监听设备插拔与广播
         try {
             val audioServiceClass = XposedHelpers.findClass("com.android.server.audio.AudioService", classLoader)
             XposedHelpers.findAndHookMethod(audioServiceClass, "systemReady", object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     val context = XposedHelpers.getObjectField(param.thisObject, "mContext") as Context
 
-                    // 初始化防抖 Handler
                     mainHandler = Handler(Looper.getMainLooper())
+
+                    // 🚀 核心优化：系统启动时，直接和蓝牙硬件层建立永久连接！
+                    val adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
+                    adapter?.getProfileProxy(context, object : android.bluetooth.BluetoothProfile.ServiceListener {
+                        override fun onServiceConnected(profile: Int, proxy: android.bluetooth.BluetoothProfile) {
+                            a2dpProxy = proxy
+                            Log.i(TAG, "🔗 蓝牙 A2DP 底层控制通道已建立永久连接！")
+                        }
+                        override fun onServiceDisconnected(profile: Int) {
+                            a2dpProxy = null
+                        }
+                    }, 2)
 
                     val filter = android.content.IntentFilter("com.lrust.twinaudio.UPDATE_CONFIG")
                     context.registerReceiver(object : android.content.BroadcastReceiver() {
@@ -94,17 +103,18 @@ object AudioServiceHook {
                             currentUsbTrack?.setVolume(currentUsbVolume)
 
                             if (!isPluginEnabled) {
-                                stopEngineLocked()
+                                synchronized(engineLock) { stopEngineLocked() }
                             } else {
-                                // 延迟变动时，平滑重启防死锁
-                                if (currentDelayMs != newDelay && isStreamerRunning) {
+                                if (currentDelayMs != newDelay) {
                                     currentDelayMs = newDelay
-                                    thread {
-                                        stopEngineLocked()
-                                        startEngineLocked(context)
+                                    if (isStreamerRunning) {
+                                        thread {
+                                            synchronized(engineLock) { // 严格上锁，防止滑块拖动产生并发爆炸
+                                                stopEngineLocked()
+                                                startEngineLocked(context)
+                                            }
+                                        }
                                     }
-                                } else {
-                                    currentDelayMs = newDelay
                                 }
                             }
                         }
@@ -143,14 +153,12 @@ object AudioServiceHook {
                     }
                 } else {
                     if (isStreamerRunning) {
-                        Log.i(TAG, "🔌 设备断开，安全清理引擎与系统路由...")
                         stopEngineLocked()
                     }
                 }
             }
         }
 
-        // 🚨 核心防抖：延迟 800ms 执行，过滤掉系统抽风的连环回调
         val triggerCheck = {
             mainHandler?.removeCallbacks(debounceRunnable!!)
             mainHandler?.postDelayed(debounceRunnable!!, 800)
@@ -164,17 +172,13 @@ object AudioServiceHook {
         triggerCheck()
     }
 
-    // 🧹 终极保洁员：专门负责清理系统遗留的路由策略
-    @Synchronized
     private fun restoreSystemRouting() {
         try {
             if (savedAudioManager != null && savedMediaStrategy != null) {
                 val clearPrefMethod = AudioManager::class.java.getMethod("removePreferredDeviceForStrategy", Class.forName("android.media.audiopolicy.AudioProductStrategy"))
                 clearPrefMethod.invoke(savedAudioManager, savedMediaStrategy)
-                Log.i(TAG, "🔄 已彻底清除系统路由霸占，恢复默认状态。")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "恢复路由失败", e)
         } finally {
             savedMediaStrategy = null
             savedAudioManager = null
@@ -185,16 +189,32 @@ object AudioServiceHook {
         if (!isStreamerRunning) return
         isStreamerRunning = false
         streamerThread?.interrupt()
-        try {
-            streamerThread?.join(1000) // 给予 1 秒钟的优雅死机时间
-        } catch (e: Exception) {}
+        try { streamerThread?.join(1000) } catch (e: Exception) {}
         streamerThread = null
         restoreSystemRouting()
     }
 
+    private fun wakeUpBluetoothRadioAsync(address: String) {
+        try {
+            val adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter() ?: return
+            adapter.getProfileProxy(appContext, object : android.bluetooth.BluetoothProfile.ServiceListener {
+                override fun onServiceConnected(profile: Int, proxy: android.bluetooth.BluetoothProfile) {
+                    try {
+                        val setActiveMethod = proxy.javaClass.getMethod("setActiveDevice", android.bluetooth.BluetoothDevice::class.java)
+                        setActiveMethod.invoke(proxy, adapter.getRemoteDevice(address))
+                    } catch (e: Exception) {}
+                }
+                override fun onServiceDisconnected(profile: Int) {}
+            }, 2)
+        } catch (t: Throwable) {}
+    }
+
+    private var appContext: Context? = null
+
     @SuppressLint("MissingPermission")
     private fun startEngineLocked(context: Context) {
         if (btDevice == null || usbDevice == null) return
+        appContext = context
         isStreamerRunning = true
 
         streamerThread = thread {
@@ -204,9 +224,23 @@ object AudioServiceHook {
             var track: AudioTrack? = null
 
             try {
-                val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                // 🚨 决杀动作：瞬发唤醒！抢在系统路由重估前，强行激活蓝牙硬件！
+                val btAddress = btDevice!!.address
+                if (a2dpProxy != null && btAddress.isNotEmpty()) {
+                    try {
+                        val adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
+                        val setActiveMethod = a2dpProxy!!.javaClass.getMethod("setActiveDevice", android.bluetooth.BluetoothDevice::class.java)
+                        setActiveMethod.invoke(a2dpProxy, adapter.getRemoteDevice(btAddress))
+                        Log.i(TAG, "🔥 瞬发物理级强启蓝牙电波，成功抢夺输出权！")
+                    } catch (e: Exception) { }
+                } else {
+                    wakeUpBluetoothRadioAsync(btAddress)
+                }
 
-                // 1. 逆向路由锁定：逼迫系统默认走蓝牙
+                val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                audioManager.setParameters("A2dpSuspended=false")
+
+                // 1. 逆向路由锁定：逼迫系统走刚被我们强行唤醒的蓝牙
                 try {
                     val strategiesClass = Class.forName("android.media.audiopolicy.AudioProductStrategy")
                     val getStrategiesMethod = AudioManager::class.java.getMethod("getAudioProductStrategies")
@@ -230,7 +264,6 @@ object AudioServiceHook {
 
                         savedAudioManager = audioManager
                         savedMediaStrategy = mediaStrategy
-                        Log.i(TAG, "🚀 [核心架构] 成功将系统主通道锁定至蓝牙！")
                     }
                 } catch (e: Exception) {}
 
@@ -271,7 +304,7 @@ object AudioServiceHook {
                         .build()
                 } finally { Binder.restoreCallingIdentity(identity) }
 
-                // 3. 构建我们自己的播放器，并锁定到 USB
+                // 3. 锁定给 USB 的轨道
                 track = AudioTrack.Builder()
                     .setAudioAttributes(
                         AudioAttributes.Builder()
@@ -291,20 +324,17 @@ object AudioServiceHook {
                 track.play()
                 track.setVolume(currentUsbVolume)
 
-                // 4. 空轨垫砖：执行 USB 延迟
+                // 4. 空轨垫砖
                 if (currentDelayMs > 0) {
                     val delayBytes = (currentDelayMs / 1000f * 48000 * 2 * 2).toInt()
                     val alignedBytes = delayBytes - (delayBytes % 4)
                     if (alignedBytes > 0) {
                         val zeroBuf = ByteArray(alignedBytes)
                         track.write(zeroBuf, 0, alignedBytes)
-                        Log.i(TAG, "⏱️ 延迟生效：已向 USB 通道注入 $currentDelayMs ms 缓冲空白数据！")
                     }
                 }
 
                 val buffer = ByteArray(bufferSize)
-                Log.i(TAG, "🎵 开始稳定无损搬运！")
-
                 while (isStreamerRunning) {
                     val read = recorder.read(buffer, 0, buffer.size)
                     if (read > 0) {
@@ -315,16 +345,12 @@ object AudioServiceHook {
             } catch (t: Throwable) {
                 Log.e(TAG, "引擎运行时崩溃跳出", t)
             } finally {
-                // 🛑 终极安全锁：无论发生什么情况（拔插、崩溃），必须彻底清理资源！
-                Log.i(TAG, "🛑 正在释放硬件管道和路由...")
                 isStreamerRunning = false
                 currentUsbTrack = null
-
                 try { recorder?.stop() } catch (e: Exception) {}
                 try { recorder?.release() } catch (e: Exception) {}
                 try { track?.stop() } catch (e: Exception) {}
                 try { track?.release() } catch (e: Exception) {}
-
                 restoreSystemRouting()
             }
         }
