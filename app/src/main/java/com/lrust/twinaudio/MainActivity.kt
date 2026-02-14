@@ -1,5 +1,6 @@
 package com.lrust.twinaudio
 
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -37,18 +38,35 @@ class MainActivity : ComponentActivity() {
 fun TwinAudioControlPanel() {
     val context = androidx.compose.ui.platform.LocalContext.current
 
-    // 绑定到底层的变量 (默认 USB 无延迟，音量最大)
-    var delayMs by remember { mutableStateOf(0f) }
-    var volumeUsb by remember { mutableStateOf(1.0f) }
-    var hookEnabled by remember { mutableStateOf(true) }
+    // 🚀 新增：获取本地存储实例
+    val sharedPrefs = remember { context.getSharedPreferences("TwinAudioPrefs", Context.MODE_PRIVATE) }
 
-    // 🚀 发送广播到底层 (AudioServiceHook 会接收这些参数)
+    // 绑定到底层的变量 (启动时优先从本地存储读取，如果没有则使用默认值)
+    var delayMs by remember { mutableStateOf(sharedPrefs.getFloat("delayMs", 0f)) }
+    var volumeUsb by remember { mutableStateOf(sharedPrefs.getFloat("volumeUsb", 1.0f)) }
+    var hookEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("hookEnabled", true)) }
+
+    // 发送广播到底层 (AudioServiceHook 会接收这些参数)
     val sendConfigUpdate = {
+        // 1. 永久保存当前设置到本地
+        sharedPrefs.edit().apply {
+            putFloat("delayMs", delayMs)
+            putFloat("volumeUsb", volumeUsb)
+            putBoolean("hookEnabled", hookEnabled)
+            apply()
+        }
+
+        // 2. 发送指令给底层系统
         val intent = Intent("com.lrust.twinaudio.UPDATE_CONFIG")
         intent.putExtra("delayMs", delayMs.roundToInt())
         intent.putExtra("volumeUsb", volumeUsb)
         intent.putExtra("hookEnabled", hookEnabled)
         context.sendBroadcast(intent)
+    }
+
+    // 🚀 新增：自动化同步！每次打开 App 界面时，自动将本地存储的配置下发给底层
+    LaunchedEffect(Unit) {
+        sendConfigUpdate()
     }
 
     Scaffold(
@@ -221,6 +239,7 @@ fun TwinAudioControlPanel() {
 
                     Text(
                         text = """
+                        • 参数记忆：您调整的参数已被自动记忆。手机重启后打开一次本软件即可重新下发参数。
                         • 蓝牙音量：请直接使用手机侧边的【实体音量键】控制。
                         • 有线音量：使用上方【独立音量】滑块控制。
                         • 延迟变动时，底层引擎会极速重启以填充空数据，声音会有半秒停顿，属正常现象。
