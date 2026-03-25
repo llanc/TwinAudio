@@ -1,5 +1,7 @@
 # TwinAudio - 双音频同步输出模块
 
+[English](README.en.md)
+
 <div align="center">
 
 ![Android](https://img.shields.io/badge/Android-13%2B-green.svg)
