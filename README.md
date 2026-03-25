@@ -439,13 +439,6 @@ SOFTWARE.
 
 ---
 
-## 📬 联系方式
-
-- **GitHub Issues**: [提交问题](https://github.com/yourusername/TwinAudio/issues)
-- **Email**: your.email@example.com
-- **Telegram**: @YourTelegramHandle
-
----
 
 <div align="center">
 
